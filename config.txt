@@ -1,0 +1,11 @@
+IP NAME        TYPE      READ/WRITE     BIT WIDTH      FREQUENCY      PROTOCOL       CLK DOMAIN     INTERCONNECT   ORIGINAL IP    
+======================================================================================================================================================
+M1             MASTER    read           64             400            ahb            clk1           GRP 1          ip1            
+M2             MASTER    write          64             400            ahb            clk1           GRP 1          ip2            
+M3             MASTER    read           64             400            ahb            clk1           GRP 1          ip3            
+M4             MASTER    read           64             400            ahb            clk1           GRP 1          ip4            
+M5             MASTER    write          64             400            ahb            clk1           GRP 1          ip5            
+M6             MASTER    read           128            200            apb            clk2           GRP2           ip6            
+M7             MASTER    write          128            200            apb            clk2           GRP2           ip7            
+M8             MASTER    read           128            200            apb            clk2           GRP2           ip8            
+M9             MASTER    write          128            200            apb            clk2           GRP2           ip9            
