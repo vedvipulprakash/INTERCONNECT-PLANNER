@@ -26,7 +26,6 @@ class InterconnectConfig:
     clk_domain: str
     master_ips: List[str]  # Original IP names (ip1, ip2, etc.)
     slave_ips: List[str]   # Original IP names (ip3, ip4, etc.)
-    connected_interconnects: List[str]
 
 class ConfigGenerator:
     def __init__(self):
@@ -53,7 +52,7 @@ class ConfigGenerator:
             workbook = openpyxl.load_workbook(excel_file)
             
             # =============================================
-            # Process IP sheet (first sheet)
+            # Process IP sheet (first sheet) - just store basic info
             # =============================================
             print("\n[DEBUG] Processing IP Sheet:")
             ip_sheet = workbook.worksheets[0]
@@ -63,34 +62,9 @@ class ConfigGenerator:
                 
                 original_name = str(row[0]).strip()
                 
-                # Determine if master or slave
-                is_master = bool(row[5])  # Master ID column
-                role = 'master' if is_master else 'slave'
-                
-                # Generate M1, M2 or S1, S2 names
-                if is_master:
-                    self.master_count += 1
-                    ip_name = f"M{self.master_count}"
-                else:
-                    self.slave_count += 1
-                    ip_name = f"S{self.slave_count}"
-                
-                # Store mapping from original name to M1/S1 name
-                self.original_ip_map[original_name] = ip_name
-                
-                ip_config = IPConfig(
-                    original_name=original_name,
-                    role=role,
-                    read_write=str(row[1]),
-                    original_bit_width=int(row[2]),
-                    original_frequency=int(row[3]),
-                    original_clk_domain=str(row[4]),
-                    final_bit_width=int(row[2]),  # Initialize with original values
-                    final_frequency=int(row[3]),
-                    final_clk_domain=str(row[4])
-                )
-                self.ip_configs[ip_name] = ip_config
-                print(f"[DEBUG] Created IP {ip_name} (originally {original_name}): {ip_config}")
+                # Store original IP info (role will be determined from Sheet2)
+                self.original_ip_map[original_name] = original_name  # Temporary mapping
+                print(f"[DEBUG] Found IP: {original_name}")
             
             # =============================================
             # Process Interconnect sheet (second sheet)
@@ -98,27 +72,48 @@ class ConfigGenerator:
             if len(workbook.worksheets) > 1:
                 print("\n[DEBUG] Processing Interconnect Sheet:")
                 interconnect_sheet = workbook.worksheets[1]
+                
+                # Find column indices for key columns
+                header_row = next(interconnect_sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+                try:
+                    ic_name_col = header_row.index("interconnect name")
+                    masters_col = header_row.index("set of masters")
+                    slaves_col = header_row.index("set of slaves")
+                except ValueError as e:
+                    raise ValueError("Could not find required columns in Sheet2") from e
+                
                 for row_idx, row in enumerate(interconnect_sheet.iter_rows(min_row=2, values_only=True), start=2):
-                    if not row[0]:  # Skip if interconnect name is empty
+                    if not row[ic_name_col]:  # Skip if interconnect name is empty
                         continue
                     
-                    # Clean and split comma-separated lists
-                    master_ips = [ip.strip() for ip in str(row[5]).split(',')] if row[5] else []
-                    slave_ips = [ip.strip() for ip in str(row[6]).split(',')] if row[6] else []
-                    connected_ics = [ic.strip() for ic in str(row[7]).split(',')] if row[7] else []
+                    ic_name = str(row[ic_name_col]).strip()
+                    
+                    # Get masters and slaves for this interconnect
+                    master_ips = []
+                    if row[masters_col]:
+                        master_ips = [ip.strip() for ip in str(row[masters_col]).split(',')]
+                    
+                    slave_ips = []
+                    if row[slaves_col]:
+                        slave_ips = [ip.strip() for ip in str(row[slaves_col]).split(',')]
+                    
+                    print(f"[DEBUG] Interconnect {ic_name} has masters: {master_ips} and slaves: {slave_ips}")
                     
                     interconnect = InterconnectConfig(
-                        name=str(row[0]),
+                        name=ic_name,
                         bit_width=int(row[1]),
                         frequency=int(row[2]),
                         protocol=str(row[3]),
                         clk_domain=str(row[4]),
                         master_ips=master_ips,
-                        slave_ips=slave_ips,
-                        connected_interconnects=connected_ics
+                        slave_ips=slave_ips
                     )
                     self.interconnect_configs[interconnect.name] = interconnect
-                    print(f"[DEBUG] Created Interconnect {interconnect.name}: {interconnect}")
+            
+            # =============================================
+            # Now properly identify masters and slaves
+            # =============================================
+            self._identify_masters_slaves()
             
             # =============================================
             # Apply interconnect properties to IPs
@@ -127,8 +122,8 @@ class ConfigGenerator:
             
             # Debug print final IP configurations
             print("\n[DEBUG] Final IP Configurations:")
-            for ip_name, config in self.ip_configs.items():
-                print(f"{ip_name}: {config}")
+            for ip_name, config in sorted(self.ip_configs.items()):
+                print(f"{ip_name} ({config.role.upper()}): Connected to {config.connected_interconnect}")
             
             print(f"\nProcessed {len(self.ip_configs)} IPs and {len(self.interconnect_configs)} interconnects")
             
@@ -136,45 +131,126 @@ class ConfigGenerator:
             print(f"\n[ERROR] Reading Excel file: {str(e)}")
             raise
     
+    def _identify_masters_slaves(self):
+        """Identifies masters and slaves based on Sheet2 data"""
+        print("\n[DEBUG] Identifying masters and slaves:")
+        
+        # First pass: Identify all masters from "Set of Masters" columns
+        all_masters = set()
+        for ic_config in self.interconnect_configs.values():
+            all_masters.update(ic_config.master_ips)
+        
+        # Second pass: Identify all slaves from "Set of Slaves" columns
+        all_slaves = set()
+        for ic_config in self.interconnect_configs.values():
+            all_slaves.update(ic_config.slave_ips)
+        
+        # Check for IPs listed as both master and slave
+        conflict_ips = all_masters.intersection(all_slaves)
+        if conflict_ips:
+            print(f"[WARNING] IPs listed as both master and slave: {conflict_ips}")
+        
+        # Create M1/S1 names and IP configurations
+        self.master_count = 0
+        self.slave_count = 0
+        self.original_ip_map = {}
+        
+        # Process masters first
+        for master_ip in sorted(all_masters):
+            self.master_count += 1
+            ip_name = f"M{self.master_count}"
+            self.original_ip_map[master_ip] = ip_name
+            
+            # Create IP config (basic info will be updated when we process Sheet1 again)
+            self.ip_configs[ip_name] = IPConfig(
+                original_name=master_ip,
+                role='master',
+                read_write='-',
+                original_bit_width=0,
+                original_frequency=0,
+                original_clk_domain='-'
+            )
+            print(f"[DEBUG] Identified master: {master_ip} -> {ip_name}")
+        
+        # Process slaves
+        for slave_ip in sorted(all_slaves):
+            self.slave_count += 1
+            ip_name = f"S{self.slave_count}"
+            self.original_ip_map[slave_ip] = ip_name
+            
+            # Create IP config (basic info will be updated when we process Sheet1 again)
+            self.ip_configs[ip_name] = IPConfig(
+                original_name=slave_ip,
+                role='slave',
+                read_write='-',
+                original_bit_width=0,
+                original_frequency=0,
+                original_clk_domain='-'
+            )
+            print(f"[DEBUG] Identified slave: {slave_ip} -> {ip_name}")
+        
+        # Now process Sheet1 again to fill in the IP details
+        workbook = openpyxl.load_workbook(self.find_excel_file())
+        ip_sheet = workbook.worksheets[0]
+        
+        for row in ip_sheet.iter_rows(min_row=2, values_only=True):
+            if not row[0]:
+                continue
+            
+            original_name = str(row[0]).strip()
+            if original_name in self.original_ip_map:
+                ip_name = self.original_ip_map[original_name]
+                ip_config = self.ip_configs[ip_name]
+                
+                # Update IP details from Sheet1
+                ip_config.read_write = str(row[1])
+                ip_config.original_bit_width = int(row[2])
+                ip_config.original_frequency = int(row[3])
+                ip_config.original_clk_domain = str(row[4])
+                
+                # Initialize final values with original values
+                ip_config.final_bit_width = ip_config.original_bit_width
+                ip_config.final_frequency = ip_config.original_frequency
+                ip_config.final_clk_domain = ip_config.original_clk_domain
+    
     def _apply_interconnect_properties(self):
         """Updates IP properties based on connected interconnects"""
         print("\n[DEBUG] Applying interconnect properties:")
         
-        # First create reverse mapping from original IP names to interconnects
-        ip_to_interconnect = {}
-        
         for ic_name, ic_config in self.interconnect_configs.items():
-            # Process masters
+            # Process masters for this interconnect
             for original_ip in ic_config.master_ips:
                 if original_ip in self.original_ip_map:
-                    mapped_name = self.original_ip_map[original_ip]
-                    ip_to_interconnect[mapped_name] = ic_name
-                    print(f"[DEBUG] Mapped master {original_ip} ({mapped_name}) to {ic_name}")
+                    ip_name = self.original_ip_map[original_ip]
+                    ip_config = self.ip_configs[ip_name]
+                    ip_config.connected_interconnect = ic_name
+                    
+                    # Update properties from interconnect
+                    ip_config.final_bit_width = ic_config.bit_width
+                    ip_config.final_frequency = ic_config.frequency
+                    ip_config.final_protocol = ic_config.protocol
+                    ip_config.final_clk_domain = ic_config.clk_domain
+                    
+                    print(f"[DEBUG] Updated master {ip_name} with {ic_name} properties")
                 else:
-                    print(f"[WARNING] Master IP {original_ip} not found in IP sheet")
+                    print(f"[WARNING] Master IP {original_ip} not found in original IP list")
             
-            # Process slaves
+            # Process slaves for this interconnect
             for original_ip in ic_config.slave_ips:
                 if original_ip in self.original_ip_map:
-                    mapped_name = self.original_ip_map[original_ip]
-                    ip_to_interconnect[mapped_name] = ic_name
-                    print(f"[DEBUG] Mapped slave {original_ip} ({mapped_name}) to {ic_name}")
+                    ip_name = self.original_ip_map[original_ip]
+                    ip_config = self.ip_configs[ip_name]
+                    ip_config.connected_interconnect = ic_name
+                    
+                    # Update properties from interconnect
+                    ip_config.final_bit_width = ic_config.bit_width
+                    ip_config.final_frequency = ic_config.frequency
+                    ip_config.final_protocol = ic_config.protocol
+                    ip_config.final_clk_domain = ic_config.clk_domain
+                    
+                    print(f"[DEBUG] Updated slave {ip_name} with {ic_name} properties")
                 else:
-                    print(f"[WARNING] Slave IP {original_ip} not found in IP sheet")
-        
-        # Now update IP configurations
-        for ip_name, interconnect_name in ip_to_interconnect.items():
-            if ip_name in self.ip_configs and interconnect_name in self.interconnect_configs:
-                ip_config = self.ip_configs[ip_name]
-                ic_config = self.interconnect_configs[interconnect_name]
-                
-                ip_config.connected_interconnect = interconnect_name
-                ip_config.final_bit_width = ic_config.bit_width
-                ip_config.final_frequency = ic_config.frequency
-                ip_config.final_protocol = ic_config.protocol
-                ip_config.final_clk_domain = ic_config.clk_domain
-                
-                print(f"[DEBUG] Updated {ip_name} with {interconnect_name} properties")
+                    print(f"[WARNING] Slave IP {original_ip} not found in original IP list")
     
     def generate_config_file(self) -> None:
         """Generates config.txt in the same directory"""
@@ -237,9 +313,8 @@ class ConfigGenerator:
             raise
 
 if __name__ == "__main__":
-    print("Auto Excel to Config Generator")
-    print("=" * 40)
-    print("Looking for Excel file in script directory...")
+    print("IP-Interconnect Config Generator")
+    print("=" * 60)
     
     generator = ConfigGenerator()
     try:
