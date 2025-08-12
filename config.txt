@@ -3,9 +3,10 @@ IP NAME        TYPE      READ/WRITE     BIT WIDTH      FREQUENCY      PROTOCOL  
 M1             MASTER    read           64             400            ahb            clk1           GRP 1          ip1            
 M2             MASTER    write          64             400            ahb            clk1           GRP 1          ip2            
 M3             MASTER    read           64             400            ahb            clk1           GRP 1          ip3            
-M4             MASTER    read           64             400            ahb            clk1           GRP 1          ip4            
-M5             MASTER    write          64             400            ahb            clk1           GRP 1          ip5            
-M6             MASTER    read           128            200            apb            clk2           GRP2           ip6            
-M7             MASTER    write          128            200            apb            clk2           GRP2           ip7            
-M8             MASTER    read           128            200            apb            clk2           GRP2           ip8            
-M9             MASTER    write          128            200            apb            clk2           GRP2           ip9            
+M4             MASTER    read           128            200            apb            clk2           GRP2           ip6            
+M5             MASTER    write          128            200            apb            clk2           GRP2           ip7            
+S1             SLAVE     read           64             400            ahb            clk1           GRP 1          ip4            
+S2             SLAVE     write          64             400            ahb            clk1           GRP 1          ip5            
+S3             SLAVE     read           128            200            apb            clk2           GRP2           ip8            
+S4             SLAVE     write          128            200            apb            clk2           GRP2           ip9            
+
